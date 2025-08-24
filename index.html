@@ -1,18 +1,48 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin />
-    <link
-            href="https://fonts.googleapis.com/css2?family=Fira+Code&family=Inter:opsz,wght@14..32,100..900&family=Poppins:wght@300;400&display=swap"
-            rel="stylesheet"
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fullcalendar/core@6.1.15/index.global.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fullcalendar/timegrid@6.1.15/index.global.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@appwrite.io/pink-icons@1.0.1/index.css">
+
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
+    <title>SoloDesk — One Link. Fully Booked.</title>
+
+    <!-- Favicon (place appwrite.svg in /public) -->
     <link rel="icon" type="image/svg+xml" href="/appwrite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Appwrite + React</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fira+Code&family=Inter:opsz,wght@14..32,100..900&family=Poppins:wght@300;400&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- SEO -->
+    <meta
+      name="description"
+      content="SoloDesk helps solo businesses take bookings online, sync calendars, and stay in control."
+    />
+    <meta name="theme-color" content="#0b0b0b" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="SoloDesk — One Link. Fully Booked." />
+    <meta
+      property="og:description"
+      content="Take bookings online, share your link, and get fully booked."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://solodesk.co.uk/" />
+    <meta property="og:image" content="/og-image.png" />
   </head>
-  <body class="bg-[#FAFAFB] font-[Inter] text-sm text-[#56565C]">
+  <!-- Keep body clean; styling comes from your app's CSS -->
+  <body>
+    <noscript>You need JavaScript enabled to run SoloDesk.</noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
