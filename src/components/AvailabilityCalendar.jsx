@@ -17,43 +17,56 @@ export default function AvailabilityCalendar({ userId, userTimezone }) {
   const [modalMode, setModalMode] = useState(""); // 'add' | 'edit'
   const [slotDate, setSlotDate] = useState("");
 
-  const fetchAvailability = async () => {
-    try {
-      const res = await databases.listDocuments(databaseId, availabilityCollectionId, [
-        Query.equal("userId", userId),
-        Query.orderAsc("startDatetime"),
-        Query.limit(100), // adjust if you expect >100, or paginate in a loop
-      ]);
+  // Replace your existing fetchAvailability with this paginated version
+const fetchAvailability = async () => {
+  setLoading(true);
+  try {
+    const allDocs = [];
+    let cursor;
 
-      // De-duplicate records with identical start+end (common if slots were generated twice)
-      const byKey = new Map();
-      for (const doc of res.documents) {
-        const startISO = doc.startDatetime;
-        const endISO = doc.endDatetime;
-        const key = `${startISO}__${endISO}`;
-        if (!byKey.has(key)) {
-          byKey.set(key, {
-            id: doc.$id,
-            title: `${new Date(startISO).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })} - ${new Date(endISO).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}`,
-            start: startISO,
-            end: endISO,
-          });
-        }
-      }
+    while (true) {
+      const res = await databases.listDocuments(
+        databaseId,
+        availabilityCollectionId,
+        [
+          Query.equal("userId", userId),
+          Query.orderAsc("startDatetime"),
+          Query.limit(100),
+          ...(cursor ? [Query.cursorAfter(cursor)] : []),
+        ]
+      );
 
-      setEvents(Array.from(byKey.values()));
-    } catch (err) {
-      console.error("Error loading availability:", err);
-    } finally {
-      setLoading(false);
+      allDocs.push(...res.documents);
+      if (res.documents.length < 100) break; // no more pages
+      cursor = res.documents[res.documents.length - 1].$id;
     }
-  };
+
+    // De-duplicate by start+end (in case generation ran twice)
+    const byKey = new Map();
+    for (const doc of allDocs) {
+      const startISO = doc.startDatetime;
+      const endISO = doc.endDatetime;
+      const key = `${startISO}__${endISO}`;
+      if (!byKey.has(key)) {
+        const startLabel = new Date(startISO).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const endLabel   = new Date(endISO).toLocaleTimeString([],   { hour: "2-digit", minute: "2-digit" });
+        byKey.set(key, {
+          id: doc.$id,
+          title: `${startLabel} - ${endLabel}`,
+          start: startISO,
+          end: endISO,
+        });
+      }
+    }
+
+    setEvents(Array.from(byKey.values()));
+  } catch (err) {
+    console.error("Error loading availability:", err);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   useEffect(() => {
     if (userId) fetchAvailability();
