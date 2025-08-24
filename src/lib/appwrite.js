@@ -8,4 +8,12 @@ const client = new Client()
 const account = new Account(client);
 const databases = new Databases(client);
 
+// debug logs for netlify
+console.log("[SoloDesk] App booting…");
+console.log("[SoloDesk] Env check", {
+  endpointOk: !!import.meta.env.VITE_APPWRITE_ENDPOINT,
+  projectOk: !!import.meta.env.VITE_APPWRITE_PROJECT_ID,
+  databaseOk: !!import.meta.env.VITE_APPWRITE_DATABASE_ID,
+});
+
 export { client, account, databases };
