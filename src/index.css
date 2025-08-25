@@ -10,16 +10,18 @@
 }
 
 .fc .fc-col-header-cell {
-  background-color: #1a1a1a;
-  color: #ffffff;
-  border-color: #333;
-  font-weight: 600;
+  background-color: #111827;
 }
+
+/* Buttons already look good; leaving your styles */
+
 
 .fc .fc-timegrid-slot {
   background-color: #0d0d0d;
   border-color: #333;
+  height: 3rem; /* was default; this makes 30-min rows taller */
 }
+
 
 .fc .fc-event {
   background-color: #4f46e5;
@@ -46,18 +48,27 @@
   background-color: #374151;
 }
 
-/* Make our custom event content wrap nicely */
+/* Center the two-line time labels inside each slot */
 .fc .sd-event {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   white-space: normal;
-  line-height: 1.1;
+  line-height: 1.15;
+  height: 100%;
+  width: 100%;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
 }
 
-/* Give 30-min events a touch more height so two lines fit comfortably */
+
+/* Ensure the event block has a bit of vertical room */
 .fc .fc-timegrid-event {
-  min-height: 28px; /* tweak to taste: 26–32 */
+  min-height: 30px; /* 30–32 looks great for two lines */
 }
 
-/* reduce inner padding so more text fits */
+/* Remove extra inner padding from FC wrapper so our own layout controls spacing */
 .fc .fc-timegrid-event .fc-event-main {
   padding: 0 !important;
 }
+

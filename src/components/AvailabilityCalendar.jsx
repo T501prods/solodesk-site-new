@@ -8,6 +8,22 @@ import { databases } from "../lib/appwrite";
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const availabilityCollectionId = "6886202f003a8d48a2e2";
 
+const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+const toLocalNaive = (iso) => {
+  // if already timezone-less, return as is
+  if (!iso || !iso.endsWith("Z")) return iso;
+  const d = new Date(iso); // interpreted as UTC -> Date (local)
+  const y = d.getFullYear();
+  const m = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mm = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  // return WITHOUT Z so FC treats it as local time
+  return `${y}-${m}-${day}T${hh}:${mm}:${ss}`;
+};
+
+
 export default function AvailabilityCalendar({ userId, userTimezone }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -44,8 +60,8 @@ const fetchAvailability = async () => {
     // De-duplicate by start+end (in case generation ran twice)
     const byKey = new Map();
     for (const doc of allDocs) {
-      const startISO = doc.startDatetime;
-      const endISO = doc.endDatetime;
+      const startISO = toLocalNaive(doc.startDatetime);
+      const endISO = toLocalNaive(doc.endDatetime);
       const key = `${startISO}__${endISO}`;
       if (!byKey.has(key)) {
         const startLabel = new Date(startISO).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -172,20 +188,27 @@ const fetchAvailability = async () => {
             select={handleSelect}
             eventClick={handleEventClick}
             height="100%"
+            eventOverlap={false}
+            slotEventOverlap={false}
             expandRows
+            dayMaxEventRows={true}
+            eventMinHeight={26}
             eventTimeFormat={{ hour: "2-digit", minute: "2-digit", hour12: true }}
             eventContent={(arg) => {
-  const [startLabel, endLabel] = arg.event.title.split(" - ");
-  return (
-    <div
-      className="sd-event bg-indigo-600 text-white rounded shadow px-2 py-1 text-[11px] leading-tight text-center"
-      title={`${startLabel} – ${endLabel}`}
-    >
-      <div className="font-semibold">{startLabel}</div>
-      <div className="opacity-90">{endLabel}</div>
-    </div>
-  );
-}}
+              const [startLabel, endLabel] = arg.event.title.split(" - ");
+              return (
+                <div
+                  className="sd-event flex h-full w-full items-center justify-center text-center rounded-md"
+                  title={`${startLabel} – ${endLabel}`}
+                >
+                  <div className="leading-tight text-[11px]">
+                    <div className="font-semibold">{startLabel}</div>
+                    <div className="opacity-90">{endLabel}</div>
+                  </div>
+                </div>
+              );
+            }}
+
 
           />
         </div>
