@@ -95,11 +95,11 @@ export default function Dashboard() {
     try {
       existing = await databases.getDocument(databaseId, publicProfilesTableId, newLink);
     } catch (err) {
-      if (err?.code !== 404) throw err; // 404 = not taken
+      if (err?.code !== 404) throw err; // 404 means not taken
     }
 
     // If exists and not ours -> taken
-    if (existing && existing.userId !== userId) {
+    if (existing && existing.user_id !== userId) {
       alert("That link is already taken. Please choose another.");
       return;
     }
@@ -108,7 +108,7 @@ export default function Dashboard() {
     if (originalLink && originalLink !== newLink) {
       try {
         const oldDoc = await databases.getDocument(databaseId, publicProfilesTableId, originalLink);
-        if (oldDoc?.userId === userId) {
+        if (oldDoc?.user_id === userId) {
           await databases.deleteDocument(databaseId, publicProfilesTableId, originalLink);
         }
       } catch (err) {
@@ -116,32 +116,24 @@ export default function Dashboard() {
       }
     }
 
-    // 3) Upsert the public mapping (doc ID = booking link)
+    // 3) Upsert the public mapping (doc ID = booking link). Only send the columns your table has.
     if (!existing) {
       await databases.createDocument(
         databaseId,
         publicProfilesTableId,
-        newLink, // ← document ID equals the booking link
-        { userId, bookingLink: newLink },
-        [
-          // Public can READ it so your public page works
-          Permission.read(Role.any()),
-          // Only you can change/delete it
-          Permission.update(Role.user(userId)),
-          Permission.delete(Role.user(userId)),
-          Permission.write(Role.user(userId)),
-        ]
+        newLink,                 // document ID equals the booking link
+        { user_id: userId }      // <-- use snake_case column name
       );
     } else {
       await databases.updateDocument(
         databaseId,
         publicProfilesTableId,
         newLink,
-        { userId, bookingLink: newLink }
+        { user_id: userId }      // <-- use snake_case column name
       );
     }
 
-    // 4) Also save to your account prefs (as before)
+    // 4) Also save to your account prefs (for convenience in Dashboard)
     await account.updatePrefs({ bookingLink: newLink });
 
     setOriginalLink(newLink);
@@ -153,6 +145,7 @@ export default function Dashboard() {
     alert(err?.message || "Error saving booking link.");
   }
 };
+
 
 
   const handleLogout = async () => {
