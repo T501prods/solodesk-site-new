@@ -1,15 +1,27 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { databases } from "../lib/appwrite";
-import { ID } from "appwrite";
+import { ID, Permission, Role } from "appwrite";
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const availabilityCollectionId = "6886202f003a8d48a2e2";
+
+// build ISO from LOCAL date + time (prevents +1h shift)
+function localISOFromYMDAndHM(ymd, hhmm) {
+  const [Y, M, D] = ymd.split("-").map(Number);
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date();
+  d.setFullYear(Y, M - 1, D);
+  d.setHours(h, m, 0, 0); // local hours
+  return d.toISOString(); // stored as UTC ISO (Z)
+}
 
 export default function AvailabilityForm({ userId }) {
   const [date, setDate] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [message, setMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -20,8 +32,8 @@ export default function AvailabilityForm({ userId }) {
       return;
     }
 
-    const startISO = `${date}T${startTime}:00Z`;
-    const endISO = `${date}T${endTime}:00Z`;
+    const startISO = localISOFromYMDAndHM(date, startTime);
+    const endISO = localISOFromYMDAndHM(date, endTime);
 
     // Simple validation: end must be after start
     if (new Date(endISO) <= new Date(startISO)) {
@@ -29,12 +41,27 @@ export default function AvailabilityForm({ userId }) {
       return;
     }
 
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+
     try {
-      await databases.createDocument(databaseId, availabilityCollectionId, ID.unique(), {
-        userId,
-        startDatetime: startISO,
-        endDatetime: endISO,
-      });
+      await databases.createDocument(
+        databaseId,
+        availabilityCollectionId,
+        ID.unique(),
+        {
+          userId,
+          startDatetime: startISO,
+          endDatetime: endISO,
+        },
+        [
+          // Public read so slots show on public booking page
+          Permission.read(Role.any()),
+          Permission.update(Role.user(userId)),
+          Permission.delete(Role.user(userId)),
+        ]
+      );
       setMessage("Slot added successfully ✅");
       setDate("");
       setStartTime("");
@@ -42,6 +69,9 @@ export default function AvailabilityForm({ userId }) {
     } catch (err) {
       console.error("Error adding slot:", err);
       setMessage("Failed to add slot.");
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -82,13 +112,14 @@ export default function AvailabilityForm({ userId }) {
         <div className="md:col-span-3">
           <button
             type="submit"
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded transition text-sm"
+            disabled={isSaving}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-6 py-2 rounded transition text-sm"
           >
-            Add Slot
+            {isSaving ? "Adding…" : "Add Slot"}
           </button>
         </div>
       </form>
-      {message && <p className="text-sm text-green-400 mt-3">{message}</p>}
+      {message && <p className="text-sm mt-3 {message.includes('✅') ? 'text-green-400' : 'text-amber-400'}">{message}</p>}
     </section>
   );
 }

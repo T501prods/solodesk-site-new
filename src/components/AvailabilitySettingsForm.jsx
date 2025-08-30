@@ -1,148 +1,183 @@
-import { useEffect, useState } from "react";
-import { databases } from "../lib/appwrite";
+// src/components/AvailabilitySettingsForm.jsx
+import { useEffect, useState, useRef } from "react";
+import { databases, account } from "../lib/appwrite";
 import { ID, Query, Permission, Role } from "appwrite";
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const settingsCollectionId = "6886516400065cd4ceba";    // availability_settings
 const availabilityCollectionId = "6886202f003a8d48a2e2"; // availability
 
-// Small delay helper
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Delete availability slots in batches to avoid rate limits
-const deleteExistingAvailability = async (userId) => {
-  try {
-    let totalDeleted = 0;
-    let cursor = undefined;
-
-    while (true) {
-      const res = await databases.listDocuments(databaseId, availabilityCollectionId, [
-        Query.equal("userId", userId),
-        Query.limit(20), // batch 20 at a time
-        ...(cursor ? [Query.cursorAfter(cursor)] : []),
-      ]);
-
-      if (res.documents.length === 0) break;
-
-      for (const doc of res.documents) {
-        let success = false;
-        while (!success) {
-          try {
-            await databases.deleteDocument(databaseId, availabilityCollectionId, doc.$id);
-            totalDeleted++;
-            success = true;
-          } catch (err) {
-            if (err.message.includes("Rate limit")) {
-              await sleep(300); // wait a bit before retry
-            } else {
-              console.error("Delete error:", err);
-              success = true; // skip if other error
-            }
-          }
-        }
-        await sleep(50); // small delay between deletes
-      }
-
-      cursor = res.documents[res.documents.length - 1].$id;
+async function with429Retry(fn, tries = 5, base = 200) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = String(err?.message || "");
+      const is429 = err?.code === 429 || msg.toLowerCase().includes("rate limit");
+      if (!is429 || attempt >= tries - 1) throw err;
+      await sleep(base * Math.pow(1.8, attempt));
+      attempt++;
     }
-
-    console.log(`Deleted ${totalDeleted} old slots.`);
-  } catch (err) {
-    console.error("Error deleting existing availability:", err);
   }
-};
+}
 
-// Generate slots in batches with throttling
-const generateAvailabilitySlots = async (settings, userId) => {
-  await deleteExistingAvailability(userId);
+// ---------- DELETION: keep looping until zero -------------
+async function hardDeleteAllUserSlots(userId) {
+  let total = 0;
+  // loop pages until empty
+  for (;;) {
+    const page = await with429Retry(() =>
+      databases.listDocuments(databaseId, availabilityCollectionId, [
+        Query.equal("userId", userId),
+        Query.orderAsc("$id"),
+        Query.limit(100),
+      ])
+    );
+    if (page.documents.length === 0) break;
 
-  const startDate = new Date();
-  const endDate = new Date();
-  endDate.setDate(startDate.getDate() + (settings.bookingWindowWeeks || 4) * 7);
+    let ops = 0;
+    for (const doc of page.documents) {
+      await with429Retry(() =>
+        databases.deleteDocument(databaseId, availabilityCollectionId, doc.$id)
+      );
+      total++;
+      ops++;
+      if (ops % 8 === 0) {
+        await sleep(1200);
+      } else {
+        await sleep(400);
+      }
+    }
+  }
+  console.log(`[availability] deleted ${total} existing slot(s)`);
+  return total;
+}
 
-  const slotLengthMs = (settings.slotLengthMinutes || 30) * 60 * 1000;
-  const newSlots = [];
+// ---------- CADENCE HELPERS -------------------------------
+function buildAnchors({ cadence, everyMinutes }) {
+  // Returns an array of minutes within an hour that are allowed start points.
+  if (cadence === "hour") return [0];
+  const n = Math.max(1, Number(everyMinutes || 30));
+  const out = [];
+  for (let m = 0; m < 60; m += n) out.push(m);
+  return out;
+}
+
+function nextAlignedStart(from, anchors) {
+  // Round "from" up to the next anchor (minute-of-hour) boundary
+  const d = new Date(from);
+  const min = d.getMinutes();
+  const cand = anchors.find((m) => m >= min);
+  if (cand !== undefined) {
+    d.setMinutes(cand, 0, 0);
+  } else {
+    // jump to next hour, first anchor
+    d.setHours(d.getHours() + 1, anchors[0], 0, 0);
+  }
+  if (d < from) d.setMinutes(from.getMinutes(), 0, 0); // safety
+  return d;
+}
+
+// ---------- GENERATE --------------------------------------
+async function generateSlots(settings, userId) {
+  await hardDeleteAllUserSlots(userId);
+
+  const {
+    weekdayStart, weekdayEnd,
+    allowWeekends, weekendStart, weekendEnd,
+    bookingWindowWeeks, slotLengthMinutes,
+    cadence = "hour",      // 'hour' | 'every'
+    everyMinutes = 60,     // used when cadence==='every'
+    gapMinutes = 0,        // optional gap after each slot
+    alignToCadence = true, // if true, start-times snap to anchors
+  } = settings;
+
+  const slotMs = Math.max(5, Number(slotLengthMinutes || 30)) * 60 * 1000;
+  const gapMs  = Math.max(0, Number(gapMinutes || 0)) * 60 * 1000;
+  const weeks  = Math.max(1, Number(bookingWindowWeeks || 4));
+
+  const anchors = buildAnchors({ cadence, everyMinutes: Number(everyMinutes) });
+
+  const startDate = new Date(); startDate.setHours(0,0,0,0);
+  const endDate = new Date(startDate); endDate.setDate(endDate.getDate() + weeks * 7);
+
+  const toDayTime = (day, hhmm) => {
+    const [h, m] = (hhmm || "00:00").split(":").map(Number);
+    const d = new Date(day);
+    d.setHours(h, m, 0, 0);
+    return d;
+  };
+
+  const payloads = [];
 
   for (let day = new Date(startDate); day <= endDate; day.setDate(day.getDate() + 1)) {
     const dow = day.getDay();
-    const isWeekend = dow === 0 || dow === 6;
     const isWeekday = dow >= 1 && dow <= 5;
+    const isWeekend = dow === 0 || dow === 6;
 
-    let start, end;
-    if (isWeekday && settings.weekdayStart && settings.weekdayEnd) {
-      start = settings.weekdayStart;
-      end = settings.weekdayEnd;
+    let dayStart, dayEnd;
+    if (isWeekday && weekdayStart && weekdayEnd) {
+      dayStart = toDayTime(day, weekdayStart);
+      dayEnd   = toDayTime(day, weekdayEnd);
+    } else if (isWeekend && allowWeekends && weekendStart && weekendEnd) {
+      dayStart = toDayTime(day, weekendStart);
+      dayEnd   = toDayTime(day, weekendEnd);
+    } else {
+      continue;
     }
-    if (isWeekend && settings.allowWeekends && settings.weekendStart && settings.weekendEnd) {
-      start = settings.weekendStart;
-      end = settings.weekendEnd;
-    }
-    if (!start || !end) continue;
 
-    const [sh, sm] = start.split(":").map(Number);
-    const [eh, em] = end.split(":").map(Number);
+    let cursor = new Date(dayStart);
+    if (alignToCadence) cursor = nextAlignedStart(cursor, anchors);
 
-    const startTime = new Date(day);
-    startTime.setHours(sh, sm, 0, 0);
+    while (cursor < dayEnd) {
+      const slotEnd = new Date(cursor.getTime() + slotMs);
+      if (slotEnd > dayEnd) break; // don't overflow past dayEnd
 
-    const endTime = new Date(day);
-    endTime.setHours(eh, em, 0, 0);
-
-    let slotTime = new Date(startTime);
-    while (slotTime < endTime) {
-      const slotEnd = new Date(slotTime.getTime() + slotLengthMs);
-      if (slotEnd > endTime) break;
-
-      newSlots.push({
+      payloads.push({
         userId,
-        startDatetime: slotTime.toISOString(),
+        startDatetime: cursor.toISOString(),
         endDatetime: slotEnd.toISOString(),
       });
 
-      slotTime = slotEnd;
+      // move to next start
+      const nextFrom = new Date(slotEnd.getTime() + gapMs);
+      cursor = alignToCadence ? nextAlignedStart(nextFrom, anchors) : nextFrom;
     }
   }
 
-  console.log("Saving", newSlots.length, "slots...");
+  console.log(`[availability] creating ${payloads.length} slot(s)`, {
+    slotLengthMinutes, gapMinutes, cadence, everyMinutes, alignToCadence
+  });
 
-  // Save in batches of 10 with throttling
-  const batchSize = 10;
-  for (let i = 0; i < newSlots.length; i += batchSize) {
-    const batch = newSlots.slice(i, i + batchSize);
-    await Promise.all(
-      batch.map(async (slot) => {
-        let success = false;
-        while (!success) {
-          try {
-            await databases.createDocument(
-              databaseId,
-              availabilityCollectionId,
-              ID.unique(),
-              slot,
-              [
-                Permission.read(Role.user(userId)),
-                Permission.update(Role.user(userId)),
-                Permission.delete(Role.user(userId)),
-              ]
-            );
-            success = true;
-          } catch (err) {
-            if (err.message.includes("Rate limit")) {
-              await sleep(300);
-            } else {
-              console.error("Error creating slot:", err);
-              success = true;
-            }
-          }
-        }
-      })
+  let ops = 0;
+  for (const body of payloads) {
+    await with429Retry(() =>
+      databases.createDocument(
+        databaseId,
+        availabilityCollectionId,
+        ID.unique(),
+        body,
+        [
+          Permission.read(Role.any()),
+          Permission.update(Role.user(userId)),
+          Permission.delete(Role.user(userId)),
+        ]
+      )
     );
-    await sleep(100); // small delay between batches
+    ops++;
+    if (ops % 8 === 0) {
+      await sleep(1200);
+    } else {
+      await sleep(400);
+    }
   }
+  console.log("[availability] generation done");
+}
 
-  console.log("All slots saved successfully.");
-};
-
+// ---------- COMPONENT -------------------------------------
 export default function AvailabilitySettingsForm({ userId }) {
   const [form, setForm] = useState({
     weekdayStart: "09:00",
@@ -152,55 +187,95 @@ export default function AvailabilitySettingsForm({ userId }) {
     weekendEnd: "",
     bookingWindowWeeks: 4,
     slotLengthMinutes: 30,
+
+    // NEW small “Advanced” controls:
+    cadence: "hour",        // 'hour' | 'every'
+    everyMinutes: 60,       // only when cadence === 'every'
+    gapMinutes: 0,          // optional gap after each slot
+    alignToCadence: true,   // snap to hour or cadence
   });
 
   const [documentId, setDocumentId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [lastSaved, setLastSaved] = useState(null);
+
+  // NEW: in-flight guard
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const fetchSettings = async () => {
+    const load = async () => {
       try {
         const res = await databases.listDocuments(databaseId, settingsCollectionId, [
           Query.equal("userId", userId),
           Query.limit(1),
         ]);
+        if (res.documents.length) {
+          const d = res.documents[0];
+          setDocumentId(d.$id);
+          setForm((f) => ({
+            ...f,
+            weekdayStart: d.weekdayStart ?? f.weekdayStart,
+            weekdayEnd: d.weekdayEnd ?? f.weekdayEnd,
+            allowWeekends: !!d.allowWeekends,
+            weekendStart: d.weekendStart ?? "",
+            weekendEnd: d.weekendEnd ?? "",
+            bookingWindowWeeks: Number(d.bookingWindowWeeks ?? f.bookingWindowWeeks),
+            slotLengthMinutes: Number(d.slotLengthMinutes ?? f.slotLengthMinutes),
 
-        if (res.documents.length > 0) {
-          const doc = res.documents[0];
-          setDocumentId(doc.$id);
-          setForm({
-            weekdayStart: doc.weekdayStart ?? "09:00",
-            weekdayEnd: doc.weekdayEnd ?? "17:00",
-            allowWeekends: !!doc.allowWeekends,
-            weekendStart: doc.weekendStart ?? "",
-            weekendEnd: doc.weekendEnd ?? "",
-            bookingWindowWeeks: doc.bookingWindowWeeks ?? 4,
-            slotLengthMinutes: doc.slotLengthMinutes ?? 30,
+            cadence: d.cadence ?? f.cadence,
+            everyMinutes: Number(d.everyMinutes ?? f.everyMinutes),
+            gapMinutes: Number(d.gapMinutes ?? f.gapMinutes),
+            alignToCadence: d.alignToCadence ?? f.alignToCadence,
+          }));
+          setLastSaved({
+            weekdayStart: d.weekdayStart,
+            weekdayEnd: d.weekdayEnd,
+            allowWeekends: !!d.allowWeekends,
+            weekendStart: d.weekendStart,
+            weekendEnd: d.weekendEnd,
+            bookingWindowWeeks: Number(d.bookingWindowWeeks),
+            slotLengthMinutes: Number(d.slotLengthMinutes),
           });
         }
-      } catch (err) {
-        console.error("Error fetching settings:", err);
+      } catch (e) {
+        console.error("Load settings failed", e);
         setMessage("Failed to load settings.");
       } finally {
         setLoading(false);
       }
     };
-
-    if (userId) fetchSettings();
+    if (userId) load();
   }, [userId]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setMessage("Saving...");
+
+    // prevent overlapping/duplicate saves
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    setMessage("Saving… (may take a moment)");
 
     try {
-      const data = { userId, ...form };
+      // Only send schema-approved fields
+      const data = {
+        userId,
+        weekdayStart: form.weekdayStart,
+        weekdayEnd: form.weekdayEnd,
+        allowWeekends: form.allowWeekends,
+        weekendStart: form.weekendStart,
+        weekendEnd: form.weekendEnd,
+        bookingWindowWeeks: form.bookingWindowWeeks,
+        slotLengthMinutes: form.slotLengthMinutes,
+        // ❌ omit cadence, everyMinutes, gapMinutes, alignToCadence
+      };
 
       if (documentId) {
         await databases.updateDocument(databaseId, settingsCollectionId, documentId, data);
       } else {
-        const newDoc = await databases.createDocument(
+        const created = await databases.createDocument(
           databaseId,
           settingsCollectionId,
           ID.unique(),
@@ -211,14 +286,38 @@ export default function AvailabilitySettingsForm({ userId }) {
             Permission.delete(Role.user(userId)),
           ]
         );
-        setDocumentId(newDoc.$id);
+        setDocumentId(created.$id);
       }
 
-      await generateAvailabilitySlots(data, userId);
-      setMessage("Settings saved! Slots updated.");
-    } catch (err) {
-      console.error("Error saving availability:", err);
+      // Decide whether to regenerate slots
+const current = {
+  weekdayStart: form.weekdayStart,
+  weekdayEnd: form.weekdayEnd,
+  allowWeekends: form.allowWeekends,
+  weekendStart: form.weekendStart,
+  weekendEnd: form.weekendEnd,
+  bookingWindowWeeks: form.bookingWindowWeeks,
+  slotLengthMinutes: form.slotLengthMinutes,
+};
+
+// If no previous save, treat as changed
+const changed =
+  !lastSaved || JSON.stringify(current) !== JSON.stringify(lastSaved);
+
+if (changed) {
+  await generateSlots(form, userId);
+  setLastSaved(current);
+  setMessage("Settings saved! Slots regenerated.");
+} else {
+  setMessage("Settings saved (no changes).");
+}
+
+    } catch (e) {
+      console.error("Error saving availability:", e);
       setMessage("Failed to save settings.");
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -227,6 +326,7 @@ export default function AvailabilitySettingsForm({ userId }) {
   return (
     <div className="bg-[#0e111a] border border-gray-800 rounded-lg p-6 max-w-xl">
       <h2 className="text-lg font-semibold mb-4">Availability Settings</h2>
+
       <form onSubmit={handleSubmit} className="space-y-4 text-sm">
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
@@ -292,7 +392,9 @@ export default function AvailabilitySettingsForm({ userId }) {
               value={form.bookingWindowWeeks}
               min={1}
               max={52}
-              onChange={(e) => setForm({ ...form, bookingWindowWeeks: parseInt(e.target.value || "1", 10) })}
+              onChange={(e) =>
+                setForm({ ...form, bookingWindowWeeks: parseInt(e.target.value || "1", 10) })
+              }
               required
               className="w-full bg-black border border-gray-700 px-3 py-2 rounded"
             />
@@ -303,10 +405,73 @@ export default function AvailabilitySettingsForm({ userId }) {
               type="number"
               value={form.slotLengthMinutes}
               min={5}
+              max={180}
+              step={5}
+              onChange={(e) =>
+                setForm({ ...form, slotLengthMinutes: parseInt(e.target.value || "5", 10) })
+              }
+              required
+              className="w-full bg-black border border-gray-700 px-3 py-2 rounded"
+            />
+          </label>
+        </div>
+
+        {/* Small "Advanced" row */}
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="block text-gray-400 mb-1">Slot Cadence</span>
+            <select
+              value={form.cadence}
+              onChange={(e) => setForm({ ...form, cadence: e.target.value })}
+              className="w-full bg-black border border-gray-700 px-3 py-2 rounded"
+            >
+              <option value="hour">On the hour</option>
+              <option value="every">Every N minutes</option>
+            </select>
+          </label>
+
+          {form.cadence === "every" ? (
+            <label className="block">
+              <span className="block text-gray-400 mb-1">Every (minutes)</span>
+              <input
+                type="number"
+                min={5}
+                max={120}
+                step={5}
+                value={form.everyMinutes}
+                onChange={(e) =>
+                  setForm({ ...form, everyMinutes: parseInt(e.target.value || "5", 10) })
+                }
+                className="w-full bg-black border border-gray-700 px-3 py-2 rounded"
+              />
+            </label>
+          ) : (
+            <label className="block">
+              <span className="block text-gray-400 mb-1">Align to cadence</span>
+              <select
+                value={form.alignToCadence ? "yes" : "no"}
+                onChange={(e) => setForm({ ...form, alignToCadence: e.target.value === "yes" })}
+                className="w-full bg-black border border-gray-700 px-3 py-2 rounded"
+              >
+                <option value="yes">Yes (snap to hour)</option>
+                <option value="no">No (continuous)</option>
+              </select>
+            </label>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="block text-gray-400 mb-1">Gap after each slot (mins)</span>
+            <input
+              type="number"
+              min={0}
               max={120}
               step={5}
-              onChange={(e) => setForm({ ...form, slotLengthMinutes: parseInt(e.target.value || "5", 10) })}
-              required
+              value={form.gapMinutes}
+              onChange={(e) =>
+                setForm({ ...form, gapMinutes: parseInt(e.target.value || "0", 10) })
+              }
               className="w-full bg-black border border-gray-700 px-3 py-2 rounded"
             />
           </label>
@@ -315,9 +480,10 @@ export default function AvailabilitySettingsForm({ userId }) {
         <div className="flex items-center gap-3">
           <button
             type="submit"
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded"
+            disabled={isSaving}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-2 rounded"
           >
-            Save Settings
+            {isSaving ? "Saving…" : "Save Settings"}
           </button>
           {message && <span className="text-gray-300">{message}</span>}
         </div>

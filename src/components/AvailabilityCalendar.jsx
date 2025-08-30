@@ -1,30 +1,57 @@
 import FullCalendar from "@fullcalendar/react";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import interactionPlugin from "@fullcalendar/interaction";
-import { useEffect, useState } from "react";
-import { ID, Query } from "appwrite";
+import { useEffect, useState, useRef } from "react";
+import { ID, Query, Permission, Role } from "appwrite";
 import { databases } from "../lib/appwrite";
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const availabilityCollectionId = "6886202f003a8d48a2e2";
 
-const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-const toLocalNaive = (iso) => {
-  // if already timezone-less, return as is
-  if (!iso || !iso.endsWith("Z")) return iso;
-  const d = new Date(iso); // interpreted as UTC -> Date (local)
-  const y = d.getFullYear();
-  const m = pad(d.getMonth() + 1);
-  const day = pad(d.getDate());
-  const hh = pad(d.getHours());
-  const mm = pad(d.getMinutes());
-  const ss = pad(d.getSeconds());
-  // return WITHOUT Z so FC treats it as local time
-  return `${y}-${m}-${day}T${hh}:${mm}:${ss}`;
-};
+// paginate helper
+async function listAllDocs(databases, databaseId, collectionId, queries) {
+  const all = [];
+  let cursor;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const res = await databases.listDocuments(
+      databaseId,
+      collectionId,
+      [...queries, Query.limit(100), ...(cursor ? [Query.cursorAfter(cursor)] : [])]
+    );
+    all.push(...res.documents);
+    if (res.documents.length < 100) break;
+    cursor = res.documents[res.documents.length - 1].$id;
+  }
+  return all;
+}
 
+// ✅ build ISO from LOCAL date + time (prevents +1h shift)
+function localISOFromYMDAndHM(ymd, hhmm) {
+  const [Y, M, D] = ymd.split("-").map(Number);   // "2025-08-30"
+  const [h, m] = hhmm.split(":").map(Number);     // "15:00"
+  const d = new Date();
+  d.setFullYear(Y, M - 1, D);
+  d.setHours(h, m, 0, 0);                         // local hours
+  return d.toISOString();                         // store as UTC ISO (Z)
+}
 
-export default function AvailabilityCalendar({ userId, userTimezone }) {
+// ✅ get YYYY-MM-DD from a Date in LOCAL time (avoids day shift)
+function ymdLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// ✅ HH:MM from a Date in LOCAL time
+function hhmmLocal(date) {
+  const h = String(date.getHours()).padStart(2, "0");
+  const m = String(date.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+export default function AvailabilityCalendar({ userId /*, userTimezone*/ }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -33,56 +60,31 @@ export default function AvailabilityCalendar({ userId, userTimezone }) {
   const [modalMode, setModalMode] = useState(""); // 'add' | 'edit'
   const [slotDate, setSlotDate] = useState("");
 
-  // Replace your existing fetchAvailability with this paginated version
-const fetchAvailability = async () => {
-  setLoading(true);
-  try {
-    const allDocs = [];
-    let cursor;
+  // prevent double submit
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-    while (true) {
-      const res = await databases.listDocuments(
-        databaseId,
-        availabilityCollectionId,
-        [
-          Query.equal("userId", userId),
-          Query.orderAsc("startDatetime"),
-          Query.limit(100),
-          ...(cursor ? [Query.cursorAfter(cursor)] : []),
-        ]
-      );
+  const fetchAvailability = async () => {
+    setLoading(true);
+    try {
+      const docs = await listAllDocs(databases, databaseId, availabilityCollectionId, [
+        Query.equal("userId", userId),
+        Query.orderAsc("startDatetime"),
+      ]);
 
-      allDocs.push(...res.documents);
-      if (res.documents.length < 100) break; // no more pages
-      cursor = res.documents[res.documents.length - 1].$id;
+      // Map each doc → event (no dedupe by time; let IDs be unique)
+      const evts = docs.map((doc) => ({
+        id: doc.$id,
+        start: new Date(doc.startDatetime),
+        end: new Date(doc.endDatetime),
+      }));
+      setEvents(evts);
+    } catch (err) {
+      console.error("Error loading availability:", err);
+    } finally {
+      setLoading(false);
     }
-
-    // De-duplicate by start+end (in case generation ran twice)
-    const byKey = new Map();
-    for (const doc of allDocs) {
-      const startISO = toLocalNaive(doc.startDatetime);
-      const endISO = toLocalNaive(doc.endDatetime);
-      const key = `${startISO}__${endISO}`;
-      if (!byKey.has(key)) {
-        const startLabel = new Date(startISO).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        const endLabel   = new Date(endISO).toLocaleTimeString([],   { hour: "2-digit", minute: "2-digit" });
-        byKey.set(key, {
-          id: doc.$id,
-          title: `${startLabel} - ${endLabel}`,
-          start: startISO,
-          end: endISO,
-        });
-      }
-    }
-
-    setEvents(Array.from(byKey.values()));
-  } catch (err) {
-    console.error("Error loading availability:", err);
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
 
   useEffect(() => {
     if (userId) fetchAvailability();
@@ -90,10 +92,10 @@ const fetchAvailability = async () => {
   }, [userId]);
 
   const handleSelect = (info) => {
-    const date = info.startStr.slice(0, 10);
-    const startHHMM = info.startStr.slice(11, 16);
-    const endHHMM = info.endStr.slice(11, 16);
-
+    // Use LOCAL date & time from Date objects (not slicing ISO)
+    const date = ymdLocal(info.start);
+    const startHHMM = hhmmLocal(info.start);
+    const endHHMM = hhmmLocal(info.end);
     setSlotDate(date);
     setEditTimes({ start: startHHMM, end: endHHMM });
     setModalMode("add");
@@ -103,49 +105,76 @@ const fetchAvailability = async () => {
   const handleEventClick = (clickInfo) => {
     const startDate = clickInfo.event.start;
     const endDate = clickInfo.event.end;
-
-    const toHHMM = (d) => (d ? d.toTimeString().slice(0, 5) : "");
-    const date = startDate.toISOString().slice(0, 10);
-
+    const date = ymdLocal(startDate); // local date (prevents off-by-one)
     setSelectedEvent(clickInfo.event);
     setSlotDate(date);
-    setEditTimes({ start: toHHMM(startDate), end: toHHMM(endDate) });
+    setEditTimes({ start: hhmmLocal(startDate), end: hhmmLocal(endDate) });
     setModalMode("edit");
     setShowModal(true);
   };
 
   const handleSubmit = async () => {
-    // Save as local time without forcing 'Z' so it shows where the user expects
-    const start = `${slotDate}T${editTimes.start}:00`;
-    const end = `${slotDate}T${editTimes.end}:00`;
+    // basic validation
+    if (!editTimes.start || !editTimes.end) {
+      alert("Please enter both start and end times.");
+      return;
+    }
+    const startISO = localISOFromYMDAndHM(slotDate, editTimes.start);
+    const endISO = localISOFromYMDAndHM(slotDate, editTimes.end);
+    if (new Date(endISO) <= new Date(startISO)) {
+      alert("End time must be after start time.");
+      return;
+    }
+
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
 
     try {
       if (modalMode === "add") {
-        // Optional: prevent adding duplicate slot times
-        const dupKey = `${start}__${end}`;
-        const already = events.some((e) => `${e.start}__${e.end}` === dupKey);
-        if (!already) {
-          await databases.createDocument(databaseId, availabilityCollectionId, ID.unique(), {
-            userId,
-            startDatetime: start,
-            endDatetime: end,
-          });
+        // Optional dup check (same exact start/end in current view)
+        const dup = events.some(
+          (e) => e.start.getTime() === new Date(startISO).getTime() && e.end.getTime() === new Date(endISO).getTime()
+        );
+        if (!dup) {
+          await databases.createDocument(
+            databaseId,
+            availabilityCollectionId,
+            ID.unique(),
+            {
+              userId,
+              startDatetime: startISO,
+              endDatetime: endISO,
+            },
+            [
+              // ✅ make custom-added slots publicly readable like generated ones
+              Permission.read(Role.any()),
+              Permission.update(Role.user(userId)),
+              Permission.delete(Role.user(userId)),
+            ]
+          );
         }
       } else if (modalMode === "edit" && selectedEvent) {
         await databases.updateDocument(databaseId, availabilityCollectionId, selectedEvent.id, {
-          startDatetime: start,
-          endDatetime: end,
+          startDatetime: startISO,
+          endDatetime: endISO,
         });
       }
-
       await fetchAvailability();
       setShowModal(false);
     } catch (err) {
       console.error("Error saving slot:", err);
+      alert("Error saving slot.");
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
     }
   };
 
   const handleDelete = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
     try {
       if (selectedEvent) {
         await databases.deleteDocument(databaseId, availabilityCollectionId, selectedEvent.id);
@@ -154,6 +183,10 @@ const fetchAvailability = async () => {
       setShowModal(false);
     } catch (err) {
       console.error("Error deleting slot:", err);
+      alert("Error deleting slot.");
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -164,16 +197,12 @@ const fetchAvailability = async () => {
       {loading ? (
         <p>Loading...</p>
       ) : (
-        <div className="h-[900px]"> {/* give the grid some vertical room */}
+        <div className="relative w-full overflow-visible">
           <FullCalendar
-            timeZone={userTimezone || "local"}
+            timeZone="local"  // keep calendar in local time
             plugins={[timeGridPlugin, interactionPlugin]}
             initialView="timeGridWeek"
-            headerToolbar={{
-              start: "prev,next today",
-              center: "title",
-              end: "timeGridWeek,timeGridDay",
-            }}
+            headerToolbar={{ start: "prev,next today", center: "title", end: "timeGridWeek,timeGridDay" }}
             slotMinTime="07:00:00"
             slotMaxTime="22:00:00"
             slotDuration="00:30:00"
@@ -187,29 +216,27 @@ const fetchAvailability = async () => {
             events={events}
             select={handleSelect}
             eventClick={handleEventClick}
-            height="100%"
+            height="auto"
+            contentHeight="auto"
+            expandRows
             eventOverlap={false}
             slotEventOverlap={false}
-            expandRows
-            dayMaxEventRows={true}
             eventMinHeight={26}
             eventTimeFormat={{ hour: "2-digit", minute: "2-digit", hour12: true }}
             eventContent={(arg) => {
-              const [startLabel, endLabel] = arg.event.title.split(" - ");
+              const start = arg.event.start;
+              const end = arg.event.end;
+              if (!start || !end) return null;
+
+              const startLabel = start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+              const endLabel = end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
               return (
-                <div
-                  className="sd-event flex h-full w-full items-center justify-center text-center rounded-md"
-                  title={`${startLabel} – ${endLabel}`}
-                >
-                  <div className="leading-tight text-[11px]">
-                    <div className="font-semibold">{startLabel}</div>
-                    <div className="opacity-90">{endLabel}</div>
-                  </div>
+                <div className="sd-event" title={`${startLabel} – ${endLabel}`}>
+                  <div className="sd-event-time">{startLabel} – {endLabel}</div>
                 </div>
               );
             }}
-
-
           />
         </div>
       )}
@@ -229,7 +256,6 @@ const fetchAvailability = async () => {
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center">
           <div className="bg-gray-900 border border-gray-800 p-6 rounded-xl w-full max-w-md">
@@ -261,18 +287,27 @@ const fetchAvailability = async () => {
 
             <div className="flex justify-end gap-4 mt-6">
               {modalMode === "edit" && (
-                <button onClick={handleDelete} className="text-sm text-red-400 hover:text-red-500">
+                <button
+                  onClick={handleDelete}
+                  disabled={isSaving}
+                  className="text-sm text-red-400 hover:text-red-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
                   Delete
                 </button>
               )}
-              <button onClick={() => setShowModal(false)} className="text-sm text-gray-400 hover:text-white">
+              <button
+                onClick={() => setShowModal(false)}
+                disabled={isSaving}
+                className="text-sm text-gray-400 hover:text-white disabled:opacity-60 disabled:cursor-not-allowed"
+              >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="bg-indigo-600 hover:bg-indigo-500 text-sm px-4 py-2 rounded text-white"
+                disabled={isSaving}
+                className="bg-indigo-600 hover:bg-indigo-500 text-sm px-4 py-2 rounded text-white disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Save
+                {isSaving ? "Saving…" : "Save"}
               </button>
             </div>
           </div>
