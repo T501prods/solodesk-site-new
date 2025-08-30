@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { account } from "./lib/appwrite";              // ✅ use shared instance
 import CookieVpnBanner from "./components/CookieVpnBanner";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 // --- Lazy-loaded pages (code-splitting) ---
 const Home = lazy(() => import("./pages/Home"));
@@ -80,17 +81,17 @@ export default function App() {
           <Route
             path="/dashboard"
             element={
-              <RequireAuth>
+              <ProtectedRoute>
                 <Dashboard />
-              </RequireAuth>
+              </ProtectedRoute>
             }
           />
           <Route
             path="/profile"
             element={
-              <RequireAuth>
+              <ProtectedRoute>
                 <Profile />
-              </RequireAuth>
+              </ProtectedRoute>
             }
           />
 

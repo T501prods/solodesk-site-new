@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Query } from "appwrite";
+import { Query, Permission, Role } from "appwrite";
 import { Link, useNavigate } from "react-router-dom";
 import { account, databases } from "../lib/appwrite";
 import ProfileForm from "../pages/ProfileForm";
@@ -31,11 +31,13 @@ function CollapsibleSection({ show, children, className = "" }) {
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const profileCollectionId = "6885251200346111d297"; // profiles
+const publicProfilesTableId = import.meta.env.VITE_PUBLIC_PROFILES_TABLE_ID;
 
 export default function Dashboard() {
   const [userId, setUserId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [customLink, setCustomLink] = useState("");
+  const [originalLink, setOriginalLink] = useState("");
   const [linkSaved, setLinkSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [userTimezone, setUserTimezone] = useState("local");
@@ -52,6 +54,7 @@ export default function Dashboard() {
         const user = await account.get();
         setUserId(user.$id);
         setCustomLink(user.prefs?.bookingLink || "");
+        setOriginalLink(user.prefs?.bookingLink || "");
 
         const res = await databases.listDocuments(databaseId, profileCollectionId, [
           Query.equal("userId", user.$id),
@@ -76,19 +79,81 @@ export default function Dashboard() {
   };
 
   const handleSaveCustomLink = async () => {
-    if (!customLink || customLink.trim().length < 3) {
-      alert("Link must be at least 3 characters");
+  const newLink = (customLink || "").trim();
+  if (newLink.length < 3) {
+    alert("Link must be at least 3 characters");
+    return;
+  }
+  if (!publicProfilesTableId) {
+    alert("Public profiles table ID is missing. Set VITE_PUBLIC_PROFILES_TABLE_ID.");
+    return;
+  }
+
+  try {
+    // 1) Is this link already used?
+    let existing = null;
+    try {
+      existing = await databases.getDocument(databaseId, publicProfilesTableId, newLink);
+    } catch (err) {
+      if (err?.code !== 404) throw err; // 404 = not taken
+    }
+
+    // If exists and not ours -> taken
+    if (existing && existing.userId !== userId) {
+      alert("That link is already taken. Please choose another.");
       return;
     }
-    try {
-      await account.updatePrefs({ bookingLink: customLink.trim() });
-      setLinkSaved(true);
-      setTimeout(() => setLinkSaved(false), 2000);
-    } catch (err) {
-      console.error("Failed to save booking link:", err);
-      alert("Error saving booking link.");
+
+    // 2) If renaming, clean up the previous doc (if it was ours)
+    if (originalLink && originalLink !== newLink) {
+      try {
+        const oldDoc = await databases.getDocument(databaseId, publicProfilesTableId, originalLink);
+        if (oldDoc?.userId === userId) {
+          await databases.deleteDocument(databaseId, publicProfilesTableId, originalLink);
+        }
+      } catch (err) {
+        if (err?.code !== 404) console.warn("Old link cleanup:", err);
+      }
     }
-  };
+
+    // 3) Upsert the public mapping (doc ID = booking link)
+    if (!existing) {
+      await databases.createDocument(
+        databaseId,
+        publicProfilesTableId,
+        newLink, // ← document ID equals the booking link
+        { userId, bookingLink: newLink },
+        [
+          // Public can READ it so your public page works
+          Permission.read(Role.any()),
+          // Only you can change/delete it
+          Permission.update(Role.user(userId)),
+          Permission.delete(Role.user(userId)),
+          Permission.write(Role.user(userId)),
+        ]
+      );
+    } else {
+      await databases.updateDocument(
+        databaseId,
+        publicProfilesTableId,
+        newLink,
+        { userId, bookingLink: newLink }
+      );
+    }
+
+    // 4) Also save to your account prefs (as before)
+    await account.updatePrefs({ bookingLink: newLink });
+
+    setOriginalLink(newLink);
+    setCustomLink(newLink);
+    setLinkSaved(true);
+    setTimeout(() => setLinkSaved(false), 2000);
+  } catch (err) {
+    console.error("Failed to save booking link:", err);
+    alert(err?.message || "Error saving booking link.");
+  }
+};
+
 
   const handleLogout = async () => {
     try {

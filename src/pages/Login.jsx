@@ -1,34 +1,42 @@
 import { useState, useEffect } from 'react'
 import { account } from '../lib/appwrite'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation();
+  const from = location.state?.from?.pathname || "/dashboard";
 
   useEffect(() => {
   const checkSession = async () => {
     try {
       await account.get()
-      navigate('/dashboard') // Redirect if already logged in
+      navigate(from, { replace: true })
     } catch {
       // No session, continue as normal
     }
   }
   checkSession()
-}, [])
+}, [from, navigate])
 
 
   const handleLogin = async (e) => {
     e.preventDefault()
+    if (isSubmitting) return;
     setError('')
     try {
+      setIsSubmitting(true)
       await account.createEmailSession(email, password)
-      navigate('/')
+      navigate(from, { replace: true });
     } catch (err) {
-      setError(err.message || 'Login failed')
+      if (err?.code === 401) setError('Invalid email or password');
+      else setError(err?.message || 'Login failed');
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -70,12 +78,13 @@ export default function Login() {
               placeholder="Email"
               className="w-full bg-black border border-gray-700 px-4 py-2 rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => setEmail(e.target.value.trim())}
               required
             />
             <input
               type="password"
               placeholder="Password"
+              autoComplete="current-password"
               className="w-full bg-black border border-gray-700 px-4 py-2 rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -86,9 +95,10 @@ export default function Login() {
             )}
             <button
               type="submit"
-              className="w-full bg-white text-black py-2 rounded-md font-semibold hover:bg-gray-200 transition"
+              disabled={isSubmitting}
+              className="w-full bg-white text-black py-2 rounded-md font-semibold hover:bg-gray-200 transition disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Log In
+              {isSubmitting ? 'Logging in...' : 'Log In'}
             </button>
           </form>
 
