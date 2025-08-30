@@ -48,7 +48,8 @@ export default function PublicProfile() {
           bookingLink
         );
         if (!alive) return;
-        const uid = mapping.userId;
+        const uid = mapping.user_id;
+        if (!uid) throw new Error("No user mapped to this link");
         setUserId(uid);
 
         // 2) load provider profile (optional)
