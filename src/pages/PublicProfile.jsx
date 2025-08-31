@@ -69,17 +69,20 @@ export default function PublicProfile() {
         const until = new Date();
         until.setDate(until.getDate() + 12 * 7);
 
+        const nowIso = new Date().toISOString();
         const slotRes = await databases.listDocuments(
           databaseId,
           availabilityCollectionId,
           [
             Query.equal("userId", uid),
-            Query.lessThan("startDatetime", until.toISOString()),
-            Query.greaterThan("endDatetime", now.toISOString()),
+            Query.greaterThanEqual("startDatetime", nowIso),
             Query.orderAsc("startDatetime"),
             Query.limit(200),
           ]
         );
+        console.log("[PublicProfile] bookingLink:", bookingLink, "uid:", uid);
+        console.log("[PublicProfile] slots found:", slotRes.documents.length);
+
         if (!alive) return;
         setSlots(slotRes.documents);
       } catch (e) {
