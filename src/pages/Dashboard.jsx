@@ -116,20 +116,20 @@ export default function Dashboard() {
       }
     }
 
-    // 3) Upsert the public mapping (doc ID = booking link) using camelCase userId
+    // 3) Upsert the public mapping (doc ID = booking link) — camelCase only
     if (!existing) {
       await databases.createDocument(
         databaseId,
         publicProfilesTableId,
-        newLink,               // document ID equals the booking link
-        { userId }             // <-- camelCase
+        newLink,              // document ID equals the booking link
+        { userId }            // 👈 camelCase only
       );
     } else {
       await databases.updateDocument(
         databaseId,
         publicProfilesTableId,
         newLink,
-        { userId }             // <-- camelCase
+        { userId }            // 👈 camelCase only
       );
     }
 
@@ -145,6 +145,7 @@ export default function Dashboard() {
     alert(err?.message || "Error saving booking link.");
   }
 };
+
 
 
 
