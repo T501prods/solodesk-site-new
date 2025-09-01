@@ -4,7 +4,7 @@ import { useParams, Link } from "react-router-dom";
 import { databases } from "../lib/appwrite";
 import { Query } from "appwrite";
 import FullCalendar from "@fullcalendar/react";
-import FullCalendar from "@fullcalendar/timegrid";
+import timeGridPlugin from "@fullcalendar/timegrid";
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const publicProfilesTableId = import.meta.env.VITE_PUBLIC_PROFILES_TABLE_ID;
