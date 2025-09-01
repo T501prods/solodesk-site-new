@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { databases } from "../lib/appwrite";
 import { Query } from "appwrite";
+import FullCalendar from "@fullcalendar/react";
+import FullCalendar from "@fullcalendar/timegrid";
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const publicProfilesTableId = import.meta.env.VITE_PUBLIC_PROFILES_TABLE_ID;
@@ -27,6 +29,12 @@ export default function PublicProfile() {
   const [userId, setUserId] = useState(null);
   const [profile, setProfile] = useState(null);
   const [slots, setSlots] = useState([]);
+  const events = slots.map(s => ({
+    id: s.$id,
+    start: s.startDatetime,
+    end: s.endDatetime,
+    title: "Available",
+  }));
 
   useEffect(() => {
     let alive = true;
@@ -131,20 +139,26 @@ export default function PublicProfile() {
               {slots.length === 0 ? (
                 <p className="text-gray-400">No upcoming availability.</p>
               ) : (
-                <ul className="space-y-2">
-                  {slots.map((s) => (
-                    <li
-                      key={s.$id}
-                      className="flex justify-between items-center bg-black border border-gray-800 rounded px-3 py-2"
-                    >
-                      <span>{fmtRange(s.startDatetime, s.endDatetime)}</span>
-                      {/* placeholder action for booking */}
-                      <button className="text-xs bg-indigo-600 hover:bg-indigo-500 px-3 py-1 rounded">
-                        Book
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <div className="relative w-full overflow-visible">
+                  <FullCalendar
+                  plugins={[timeGridPlugin]}
+                  timeZone="local"
+                  initialView="timeGridWeek"
+                  headerToolbar={{ start: "prev,next today", center: "title", end: "timeGridWeek,timeGridDay" }}
+                  allDaySlot={false}
+                  slotMinTime="07:00:00"
+                  slotMaxTime="22:00:00"
+                  slotDuration="00:30:00"
+                  eventOverlap={false}
+                  slotEventOverlap={false}
+                  editable={false}
+                  selectable={false}
+                  height="auto"
+                  contentHeight="auto"
+                  events={events}
+                  eventTimeFormat={{ hour: "2-digit", minute: "2-digit", hour12: true }}
+                />
+                </div>
               )}
             </section>
           </>
