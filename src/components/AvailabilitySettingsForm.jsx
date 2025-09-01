@@ -281,7 +281,7 @@ export default function AvailabilitySettingsForm({ userId }) {
           ID.unique(),
           data,
           [
-            Permission.read(Role.user(userId)),
+            Permission.read(Role.any()),
             Permission.update(Role.user(userId)),
             Permission.delete(Role.user(userId)),
           ]
