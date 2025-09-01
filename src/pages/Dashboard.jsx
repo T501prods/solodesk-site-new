@@ -99,7 +99,7 @@ export default function Dashboard() {
     }
 
     // If exists and not ours -> taken
-    if (existing && existing.user_id !== userId) {
+    if (existing && existing.userId !== userId) {
       alert("That link is already taken. Please choose another.");
       return;
     }
@@ -108,7 +108,7 @@ export default function Dashboard() {
     if (originalLink && originalLink !== newLink) {
       try {
         const oldDoc = await databases.getDocument(databaseId, publicProfilesTableId, originalLink);
-        if (oldDoc?.user_id === userId) {
+        if (oldDoc?.userId === userId) {
           await databases.deleteDocument(databaseId, publicProfilesTableId, originalLink);
         }
       } catch (err) {
@@ -116,24 +116,24 @@ export default function Dashboard() {
       }
     }
 
-    // 3) Upsert the public mapping (doc ID = booking link). Only send the columns your table has.
+    // 3) Upsert the public mapping (doc ID = booking link) using camelCase userId
     if (!existing) {
       await databases.createDocument(
         databaseId,
         publicProfilesTableId,
-        newLink,                 // document ID equals the booking link
-        { user_id: userId }      // <-- use snake_case column name
+        newLink,               // document ID equals the booking link
+        { userId }             // <-- camelCase
       );
     } else {
       await databases.updateDocument(
         databaseId,
         publicProfilesTableId,
         newLink,
-        { user_id: userId }      // <-- use snake_case column name
+        { userId }             // <-- camelCase
       );
     }
 
-    // 4) Also save to your account prefs (for convenience in Dashboard)
+    // 4) Also save to your account prefs (for Dashboard convenience)
     await account.updatePrefs({ bookingLink: newLink });
 
     setOriginalLink(newLink);
@@ -145,6 +145,7 @@ export default function Dashboard() {
     alert(err?.message || "Error saving booking link.");
   }
 };
+
 
 
 
