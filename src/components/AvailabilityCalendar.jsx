@@ -199,6 +199,18 @@ export default function AvailabilityCalendar({ userId /*, userTimezone*/ }) {
       ) : (
         <div className="relative w-full overflow-visible">
           <FullCalendar
+            dayHeaders={true}
+            dayHeaderFormat={{ weekday: "short", day: "numeric" }}
+            dayHeaderClassNames={() => [
+              "!bg-gray-800/70",
+              "backdrop-blur",
+              "text-white",
+              "text-[13px]",
+              "font-semibold",
+              "py-1",
+              "border-b",
+              "border-gray-700"
+            ]}
             timeZone="local"  // keep calendar in local time
             plugins={[timeGridPlugin, interactionPlugin]}
             initialView="timeGridWeek"
@@ -208,7 +220,6 @@ export default function AvailabilityCalendar({ userId /*, userTimezone*/ }) {
             slotDuration="00:30:00"
             slotLabelFormat={{ hour: "numeric", minute: "2-digit", hour12: true }}
             slotLabelClassNames={() => ["text-gray-400", "text-[11px]", "font-mono"]}
-            dayHeaderFormat={{ weekday: "short", day: "numeric" }}
             selectable
             nowIndicator
             allDaySlot={false}

@@ -1,6 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { account } from "./lib/appwrite";              // ✅ use shared instance
+import { lazy, Suspense, useEffect } from "react";
+import { BrowserRouter as Router, Routes, Route, useLocation } from "react-router-dom";
 import CookieVpnBanner from "./components/CookieVpnBanner";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -8,9 +7,9 @@ import ProtectedRoute from "./components/ProtectedRoute";
 const Home = lazy(() => import("./pages/Home"));
 const Signup = lazy(() => import("./pages/Signup"));
 const Login = lazy(() => import("./pages/Login"));
-// const TestLogin = lazy(() => import("./pages/TestLogin")); // ❌ removed (file deleted)
 const Profile = lazy(() => import("./pages/Profile"));
 const PublicProfile = lazy(() => import("./pages/PublicProfile"));
+const BookingForm = lazy(() => import("./pages/BookingForm"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 // --- Small loader for Suspense ---
@@ -25,28 +24,6 @@ function ScrollToTop() {
     window.scrollTo(0, 0);
   }, [pathname]);
   return null;
-}
-
-// --- Auth guard for protected routes ---
-function RequireAuth({ children }) {
-  const [state, setState] = useState({ checking: true, authed: false });
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        await account.get();
-        if (mounted) setState({ checking: false, authed: true });
-      } catch {
-        if (mounted) setState({ checking: false, authed: false });
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
-
-  if (state.checking) return <Loader />;
-  if (!state.authed) return <Navigate to="/login" replace />;
-  return children;
 }
 
 // --- 404 page ---
@@ -73,6 +50,7 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/book" element={<BookingForm />} />
 
           {/* Public profile by booking link */}
           <Route path="/:bookingLink" element={<PublicProfile />} />

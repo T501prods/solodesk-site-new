@@ -31,7 +31,7 @@ function CollapsibleSection({ show, children, className = "" }) {
 
 const databaseId = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 const profileCollectionId = "6885251200346111d297"; // profiles
-const publicProfilesTableId = import.meta.env.VITE_PUBLIC_PROFILES_TABLE_ID;
+const publicProfilesTableId = import.meta.env.VITE_PUBLIC_PROFILES_TABLE_ID || "68b36096002de4e6c01f";
 
 export default function Dashboard() {
   const [userId, setUserId] = useState(null);
